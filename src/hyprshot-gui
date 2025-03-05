@@ -5,11 +5,12 @@ import sys
 import argparse
 import subprocess
 import os
+from time import localtime, strftime
 
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Gio, GLib, Gdk
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 
 HELP_TEXT = """Usage: hyprshot-gui [OPTIONS]
 
@@ -17,27 +18,29 @@ Options:
   -h, --help                Show this help message and exit.
   -v, --version             Show version information and exit.
 
-  -o, --output-folder       directory in which to save screenshot 
+  -o, --output-folder       directory in which to save screenshot
   -z, --freeze              freeze the screen on initialization
   -d, --delay               time delay in taking screenshot
   --clipboard-only          Save only to clipboard
 
   -s, --silent              don't send notification when screenshot is saved
-  -t, --notify-timeout       notification timeout in milliseconds
+  -t, --notify-timeout      notification timeout in milliseconds
+  -r, --raw                 output raw image data to stdout
 
 Description:
-  Hyprshot GUI is a simple GTK4-based application for taking screenshots, 
+  Hyprshot GUI is a simple GTK4-based application for taking screenshots,
   utilizing Hyprshot under the hood.
 """
 
 
 # Default values
-OutputDir = os.path.expanduser("~/Pictures")
+OutputDir = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) # Default user localized pictures folder
 Delay = 0
 NotifyTimeout = 5000
 ClipboardOnly = False
 Freeze = False
 Silent = False
+Raw = False
 
 
 # Types
@@ -76,6 +79,8 @@ parser.add_argument("-v", "--version", action="store_true")
 
 parser.add_argument("-h", "--help", action="store_true")
 
+parser.add_argument("-r", "--raw", action="store_true")
+
 args = parser.parse_args()
 
 if args.help:
@@ -105,6 +110,9 @@ if args.freeze:
 if args.clipboard_only:
     ClipboardOnly = True
 
+if args.raw:
+    Raw = True
+
 
 class ScreenshotApp(Gtk.ApplicationWindow):
     def __init__(self, app):
@@ -120,6 +128,8 @@ class ScreenshotApp(Gtk.ApplicationWindow):
 
         self.delay_seconds = Delay  # Default delay
         self.output_folder = os.path.expanduser(OutputDir)  # Default folder
+        self.right_now = strftime("%Y-%m-%d-%H-%M-%S", localtime()) # Year-month-day-hour-minutes-seconds
+        self.file_name = "Screenshot-"+self.right_now+".png"
 
         # Load inline CSS
         self.load_css()
@@ -159,12 +169,22 @@ class ScreenshotApp(Gtk.ApplicationWindow):
         # Toggle switch for clipboard mode
         self.clipboard_toggle = Gtk.Switch()
         self.clipboard_toggle.set_active(ClipboardOnly)  # Default: Off
-        toggle_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        toggle_label = Gtk.Label(label="Clipboard Only:")
-        toggle_label.set_halign(Gtk.Align.START)  # Align label to left
-        toggle_box.append(toggle_label)
-        toggle_box.append(Gtk.Box(hexpand=True))  # Spacer for right alignment
-        toggle_box.append(self.clipboard_toggle)
+        clipboard_toggle_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        clipboard_toggle_label = Gtk.Label(label="Clipboard Only:")
+        clipboard_toggle_label.set_halign(Gtk.Align.START)  # Align label to left
+        clipboard_toggle_box.append(clipboard_toggle_label)
+        clipboard_toggle_box.append(Gtk.Box(hexpand=True))  # Spacer for right alignment
+        clipboard_toggle_box.append(self.clipboard_toggle)
+
+        # Toggle switch for raw format
+        self.raw_format_toggle = Gtk.Switch()
+        self.raw_format_toggle.set_active(Raw)  # Default: Off
+        raw_toggle_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        raw_toggle_label = Gtk.Label(label="Raw:")
+        raw_toggle_label.set_halign(Gtk.Align.START)  # Align label to left
+        raw_toggle_box.append(raw_toggle_label)
+        raw_toggle_box.append(Gtk.Box(hexpand=True))  # Spacer for right alignment
+        raw_toggle_box.append(self.raw_format_toggle)
 
         # Delay Selection Box
         delay_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
@@ -193,12 +213,20 @@ class ScreenshotApp(Gtk.ApplicationWindow):
         folder_label = Gtk.Label(label="Save to:")
         folder_label.set_halign(Gtk.Align.START)  # Align label to left
 
+        self.current_folder_path_label = Gtk.Label()
+        self.current_folder_path_label.set_markup("<small>Saving to: "+self.output_folder+"</small>")
+        self.current_folder_path_label.set_halign(Gtk.Align.START)
+
         self.folder_button = Gtk.Button(label="Select Folder")
         self.folder_button.connect("clicked", self.select_custom_folder)
 
         folder_box.append(folder_label)
         folder_box.append(Gtk.Box(hexpand=True))  # Spacer for right alignment
         folder_box.append(self.folder_button)
+
+        folder_box_path = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        folder_box_path.append(self.current_folder_path_label)
+        folder_box_path.append(Gtk.Box(hexpand=True))  # Spacer for right alignment
 
         # Create a frame to wrap options
         options_frame = Gtk.Frame()
@@ -213,9 +241,11 @@ class ScreenshotApp(Gtk.ApplicationWindow):
         options_box.set_margin_end(5)
 
         # Add elements to the options box
-        options_box.append(toggle_box)
+        options_box.append(clipboard_toggle_box)
+        options_box.append(raw_toggle_box)
         options_box.append(delay_box)
         options_box.append(folder_box)
+        options_box.append(folder_box_path)
 
         # Add options box inside the frame
         options_frame.set_child(options_box)
@@ -266,6 +296,7 @@ class ScreenshotApp(Gtk.ApplicationWindow):
                 folder = dialog.select_folder_finish(result)
                 if folder:
                     self.output_folder = folder.get_path()
+                    self.current_folder_path_label.set_text(folder.get_path())
             except Exception as e:
                 if "Dismissed by user" not in str(e):
                     print(f"Error: {e}")
@@ -283,6 +314,7 @@ class ScreenshotApp(Gtk.ApplicationWindow):
 
     def run_screenshot(self, cmd):
         """Runs the screenshot command asynchronously with delay."""
+
         if self.clipboard_toggle.get_active():
             cmd.append("--clipboard-only")
 
@@ -295,8 +327,14 @@ class ScreenshotApp(Gtk.ApplicationWindow):
         if NotifyTimeout is not None and NotifyTimeout > 0:
             cmd.append(f"-t {NotifyTimeout}")
 
+        # Default file name
+        cmd.extend(["--filename", self.file_name])
+
         # Add output folder option
         cmd.extend(["--output-folder", self.output_folder])
+
+        if self.raw_format_toggle.get_active():
+            cmd.append("--raw")
 
         # Hide the window instead of closing it so users can take the screenshot freely without the apps interference in screenshot
         self.set_visible(False)
